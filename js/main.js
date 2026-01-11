@@ -24,7 +24,7 @@ class HexMapApp {
         this.controls = new CameraControls(this.canvas, () => this.render());
 
         // Current map state
-        this.map = null;
+        this.mapData = null;
         this.cols = 0;
         this.rows = 0;
         this.hoveredHex = null;
@@ -99,12 +99,12 @@ class HexMapApp {
         this.cols = size.cols;
         this.rows = size.rows;
 
-        this.map = this.mapGenerator.generate(this.cols, this.rows);
+        this.mapData = this.mapGenerator.generate(this.cols, this.rows);
         this.resetView();
     }
 
     resetView() {
-        if (!this.map) return;
+        if (!this.mapData) return;
 
         const dims = this.hexGrid.getMapDimensions(this.cols, this.rows);
         this.controls.resetView(
@@ -138,10 +138,11 @@ class HexMapApp {
     }
 
     render() {
-        if (!this.map) return;
+        if (!this.mapData) return;
 
         const ctx = this.ctx;
         const { offsetX, offsetY, scale } = this.controls.getTransform();
+        const { map, rivers, roads } = this.mapData;
 
         // Clear canvas
         ctx.fillStyle = '#0f0f1a';
@@ -169,7 +170,7 @@ class HexMapApp {
                     continue;
                 }
 
-                const terrain = this.map[row][col];
+                const terrain = map[row][col];
                 const isHovered = this.hoveredHex &&
                                   this.hoveredHex.col === col &&
                                   this.hoveredHex.row === row;
@@ -178,10 +179,117 @@ class HexMapApp {
             }
         }
 
+        // Render roads (below rivers)
+        this.renderRoads(ctx, roads);
+
+        // Render rivers (on top)
+        this.renderRivers(ctx, rivers);
+
         ctx.restore();
 
         // Draw zoom level indicator
         this.drawZoomIndicator();
+    }
+
+    renderRivers(ctx, rivers) {
+        if (!rivers || rivers.length === 0) return;
+
+        ctx.strokeStyle = '#2196f3';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        rivers.forEach(river => {
+            if (river.length < 2) return;
+
+            // Draw river as a path through hex edge midpoints
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#1565c0';
+            ctx.beginPath();
+
+            let started = false;
+            for (let i = 0; i < river.length; i++) {
+                const segment = river[i];
+                const { x: cx, y: cy } = this.hexGrid.hexToPixel(segment.col, segment.row);
+
+                if (segment.entryEdge === -1) {
+                    // River source - start from center
+                    ctx.moveTo(cx, cy);
+                    started = true;
+                } else if (!started) {
+                    const entryMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.entryEdge);
+                    ctx.moveTo(entryMid.x, entryMid.y);
+                    started = true;
+                }
+
+                if (segment.exitEdge >= 0) {
+                    const exitMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.exitEdge);
+                    // Curve through center for smoother appearance
+                    ctx.quadraticCurveTo(cx, cy, exitMid.x, exitMid.y);
+                } else {
+                    // River ends here (at water)
+                    ctx.lineTo(cx, cy);
+                }
+            }
+
+            ctx.stroke();
+
+            // Draw lighter highlight
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#64b5f6';
+            ctx.stroke();
+        });
+    }
+
+    renderRoads(ctx, roads) {
+        if (!roads || roads.length === 0) return;
+
+        roads.forEach(road => {
+            if (road.length < 1) return;
+
+            // Draw road shadow/outline
+            ctx.lineWidth = 6;
+            ctx.strokeStyle = '#5d4037';
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+
+            let started = false;
+            for (let i = 0; i < road.length; i++) {
+                const segment = road[i];
+                const { x: cx, y: cy } = this.hexGrid.hexToPixel(segment.col, segment.row);
+
+                if (!started) {
+                    if (segment.entryEdge >= 0) {
+                        const entryMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.entryEdge);
+                        ctx.moveTo(entryMid.x, entryMid.y);
+                    } else {
+                        ctx.moveTo(cx, cy);
+                    }
+                    started = true;
+                }
+
+                if (segment.exitEdge >= 0) {
+                    const exitMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.exitEdge);
+                    ctx.quadraticCurveTo(cx, cy, exitMid.x, exitMid.y);
+                } else {
+                    ctx.lineTo(cx, cy);
+                }
+            }
+
+            ctx.stroke();
+
+            // Draw road surface
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#a1887f';
+            ctx.stroke();
+
+            // Draw center line (dashed)
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#d7ccc8';
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        });
     }
 
     drawZoomIndicator() {
