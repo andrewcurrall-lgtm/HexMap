@@ -46,10 +46,10 @@ export class HexGrid {
     }
 
     // Get corners of a hex for drawing (flat-top orientation)
+    // Corners at angles 0°, 60°, 120°, 180°, 240°, 300°
     getHexCorners(cx, cy) {
         const corners = [];
         for (let i = 0; i < 6; i++) {
-            // Flat-top: angles at 0°, 60°, 120°, 180°, 240°, 300°
             const angle = (Math.PI / 180) * (60 * i);
             corners.push({
                 x: cx + this.hexSize * Math.cos(angle),
@@ -59,19 +59,24 @@ export class HexGrid {
         return corners;
     }
 
-    // Get the pixel position of a specific edge midpoint (0-5, starting from right going clockwise)
+    // Get the pixel position of a specific edge midpoint
+    // Edge indices 0-5 correspond to directions: SE, S, SW, NW, N, NE
+    // (matching the neighbor order from getNeighbors)
     getEdgeMidpoint(col, row, edgeIndex) {
         const { x: cx, y: cy } = this.hexToPixel(col, row);
-        const corners = this.getHexCorners(cx, cy);
-        const nextIndex = (edgeIndex + 1) % 6;
+        // Edge midpoints are at angles 30°, 90°, 150°, 210°, 270°, 330°
+        // These correspond to edge indices 0, 1, 2, 3, 4, 5
+        const angle = (Math.PI / 180) * (30 + 60 * edgeIndex);
+        // Distance to edge midpoint is size * cos(30°) = size * sqrt(3)/2
+        const dist = this.hexSize * Math.sqrt(3) / 2;
         return {
-            x: (corners[edgeIndex].x + corners[nextIndex].x) / 2,
-            y: (corners[edgeIndex].y + corners[nextIndex].y) / 2
+            x: cx + dist * Math.cos(angle),
+            y: cy + dist * Math.sin(angle)
         };
     }
 
-    // Draw a single hex tile
-    drawHex(ctx, col, row, terrain, highlight = false) {
+    // Draw a single hex tile (just the base, no features)
+    drawHexBase(ctx, col, row, terrain, highlight = false) {
         const { x: cx, y: cy } = this.hexToPixel(col, row);
         const corners = this.getHexCorners(cx, cy);
 
@@ -108,10 +113,13 @@ export class HexGrid {
             ctx.lineWidth = 3;
             ctx.stroke();
         }
+    }
 
-        // Render terrain details with seeded random based on position
+    // Draw terrain features (called separately so they can be on top of roads/rivers)
+    drawHexFeatures(ctx, col, row, terrain) {
+        const { x: cx, y: cy } = this.hexToPixel(col, row);
+        const seed = col * 1000 + row;
         ctx.save();
-        const seed = col * 1000 + row; // Deterministic seed per hex
         terrain.render(ctx, cx, cy, this.hexSize, seed);
         ctx.restore();
     }
@@ -129,17 +137,26 @@ export class HexGrid {
     }
 
     // Get neighbors of a hex (flat-top, odd-q offset)
+    // Returns neighbors in order matching edge indices: SE, S, SW, NW, N, NE
     getNeighbors(col, row) {
         const isOdd = col & 1;
-        // For flat-top odd-q: directions are [E, SE, SW, W, NW, NE]
+        // Edge 0 = SE, Edge 1 = S, Edge 2 = SW, Edge 3 = NW, Edge 4 = N, Edge 5 = NE
         const directions = isOdd
             ? [
-                [1, 0], [1, 1], [0, 1],
-                [-1, 1], [-1, 0], [0, -1]
+                [1, 1],   // SE
+                [0, 1],   // S
+                [-1, 1],  // SW
+                [-1, 0],  // NW
+                [0, -1],  // N
+                [1, 0]    // NE
               ]
             : [
-                [1, -1], [1, 0], [0, 1],
-                [-1, 0], [-1, -1], [0, -1]
+                [1, 0],   // SE
+                [0, 1],   // S
+                [-1, 0],  // SW
+                [-1, -1], // NW
+                [0, -1],  // N
+                [1, -1]   // NE
               ];
 
         return directions.map(([dc, dr]) => ({

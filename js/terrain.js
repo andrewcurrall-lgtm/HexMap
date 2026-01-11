@@ -15,15 +15,31 @@ function getRandoms(seed, count) {
     return randoms;
 }
 
-// Generate random point within hex bounds (flat-top)
-function randomHexPoint(cx, cy, size, rand1, rand2, margin = 0.7) {
-    // Use rejection sampling within hex
-    const angle = rand1 * Math.PI * 2;
-    const dist = rand2 * size * margin;
-    return {
-        x: cx + Math.cos(angle) * dist,
-        y: cy + Math.sin(angle) * dist
-    };
+// Generate well-distributed points within hex using jittered grid
+function getDistributedPoints(cx, cy, size, seed, count, margin = 0.65) {
+    const randoms = getRandoms(seed, count * 3);
+    const points = [];
+    const radius = size * margin;
+
+    // Use golden angle for even distribution
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+    for (let i = 0; i < count; i++) {
+        // Sunflower seed pattern for even distribution
+        const r = radius * Math.sqrt((i + 0.5) / count);
+        const theta = i * goldenAngle + randoms[i] * 0.5;
+
+        // Add some jitter
+        const jitterR = r * (0.85 + randoms[i + count] * 0.3);
+        const jitterTheta = theta + (randoms[i + count * 2] - 0.5) * 0.4;
+
+        points.push({
+            x: cx + jitterR * Math.cos(jitterTheta),
+            y: cy + jitterR * Math.sin(jitterTheta)
+        });
+    }
+
+    return points;
 }
 
 export const TerrainTypes = {
@@ -35,16 +51,14 @@ export const TerrainTypes = {
         borderColor: '#558b2f',
         weight: 30,
         render: (ctx, cx, cy, size, seed) => {
-            const randoms = getRandoms(seed, 30);
+            const points = getDistributedPoints(cx, cy, size, seed, 8, 0.7);
+            const randoms = getRandoms(seed + 500, 16);
+
             ctx.strokeStyle = '#558b2f';
             ctx.lineWidth = 1.5;
 
-            // Scatter grass tufts across the hex
-            const numTufts = 6 + Math.floor(randoms[0] * 4);
-            for (let i = 0; i < numTufts; i++) {
-                const ri = i * 3;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.65);
-                const tuftHeight = 4 + randoms[ri + 3] * 4;
+            points.forEach((pos, i) => {
+                const tuftHeight = 4 + randoms[i] * 4;
 
                 // Left blade
                 ctx.beginPath();
@@ -57,7 +71,7 @@ export const TerrainTypes = {
                 ctx.moveTo(pos.x, pos.y);
                 ctx.quadraticCurveTo(pos.x + 2, pos.y - tuftHeight * 0.6, pos.x + 2, pos.y - tuftHeight * 0.9);
                 ctx.stroke();
-            }
+            });
         }
     },
 
@@ -69,23 +83,19 @@ export const TerrainTypes = {
         borderColor: '#1b5e20',
         weight: 25,
         render: (ctx, cx, cy, size, seed) => {
-            const randoms = getRandoms(seed, 25);
-
-            // Scatter trees across the hex
-            const numTrees = 3 + Math.floor(randoms[0] * 3);
-            const trees = [];
-
-            for (let i = 0; i < numTrees; i++) {
-                const ri = i * 4;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.55);
-                const treeSize = 0.7 + randoms[ri + 3] * 0.5;
-                trees.push({ ...pos, size: treeSize, depth: pos.y });
-            }
+            // Get evenly distributed tree positions
+            const treePoints = getDistributedPoints(cx, cy, size, seed, 5, 0.6);
+            const randoms = getRandoms(seed + 500, 15);
 
             // Sort by y for depth ordering
+            const trees = treePoints.map((pos, i) => ({
+                ...pos,
+                size: 0.7 + randoms[i] * 0.4,
+                depth: pos.y
+            }));
             trees.sort((a, b) => a.depth - b.depth);
 
-            trees.forEach(tree => {
+            trees.forEach((tree, i) => {
                 const tx = tree.x;
                 const ty = tree.y;
                 const ts = tree.size;
@@ -124,101 +134,61 @@ export const TerrainTypes = {
         render: (ctx, cx, cy, size, seed) => {
             const randoms = getRandoms(seed, 15);
 
-            // Back mountains (smaller, darker)
-            const numBack = 1 + Math.floor(randoms[0] * 2);
-            for (let i = 0; i < numBack; i++) {
-                const ox = (randoms[i + 1] - 0.5) * size * 0.8;
-                const oy = (randoms[i + 2] - 0.5) * size * 0.3;
-                const mw = 10 + randoms[i + 3] * 8;
-                const mh = 8 + randoms[i + 4] * 6;
+            // Back mountain
+            const backOx = (randoms[0] - 0.5) * size * 0.4;
+            ctx.fillStyle = '#546e7a';
+            ctx.beginPath();
+            ctx.moveTo(cx + backOx + 5, cy + 10);
+            ctx.lineTo(cx + backOx + 12, cy - 6);
+            ctx.lineTo(cx + backOx + 22, cy + 10);
+            ctx.closePath();
+            ctx.fill();
 
-                ctx.fillStyle = '#546e7a';
-                ctx.beginPath();
-                ctx.moveTo(cx + ox - mw, cy + oy + 8);
-                ctx.lineTo(cx + ox, cy + oy - mh);
-                ctx.lineTo(cx + ox + mw, cy + oy + 8);
-                ctx.closePath();
-                ctx.fill();
-            }
-
-            // Main mountain
-            const mainOx = (randoms[6] - 0.5) * size * 0.2;
+            // Main mountain (centered)
             ctx.fillStyle = '#78909c';
             ctx.beginPath();
-            ctx.moveTo(cx + mainOx - 15, cy + 10);
-            ctx.lineTo(cx + mainOx, cy - 14);
-            ctx.lineTo(cx + mainOx + 15, cy + 10);
+            ctx.moveTo(cx - 15, cy + 10);
+            ctx.lineTo(cx, cy - 14);
+            ctx.lineTo(cx + 15, cy + 10);
             ctx.closePath();
             ctx.fill();
 
             // Snow cap
             ctx.fillStyle = '#eceff1';
             ctx.beginPath();
-            ctx.moveTo(cx + mainOx, cy - 14);
-            ctx.lineTo(cx + mainOx - 5, cy - 5);
-            ctx.lineTo(cx + mainOx - 2, cy - 5);
-            ctx.lineTo(cx + mainOx, cy - 7);
-            ctx.lineTo(cx + mainOx + 2, cy - 5);
-            ctx.lineTo(cx + mainOx + 5, cy - 5);
+            ctx.moveTo(cx, cy - 14);
+            ctx.lineTo(cx - 5, cy - 5);
+            ctx.lineTo(cx - 2, cy - 5);
+            ctx.lineTo(cx, cy - 7);
+            ctx.lineTo(cx + 2, cy - 5);
+            ctx.lineTo(cx + 5, cy - 5);
             ctx.closePath();
             ctx.fill();
-        }
-    },
-
-    WATER: {
-        id: 'water',
-        name: 'Water',
-        baseColor: '#1976d2',
-        accentColor: '#2196f3',
-        borderColor: '#0d47a1',
-        weight: 15,
-        render: (ctx, cx, cy, size, seed) => {
-            const randoms = getRandoms(seed, 20);
-            ctx.strokeStyle = '#64b5f6';
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'round';
-
-            // Scatter waves across the hex
-            const numWaves = 3 + Math.floor(randoms[0] * 3);
-            for (let i = 0; i < numWaves; i++) {
-                const ri = i * 3;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.5);
-                const waveWidth = 8 + randoms[ri + 3] * 10;
-
-                ctx.beginPath();
-                ctx.moveTo(pos.x - waveWidth/2, pos.y);
-                ctx.quadraticCurveTo(pos.x - waveWidth/4, pos.y - 3, pos.x, pos.y);
-                ctx.quadraticCurveTo(pos.x + waveWidth/4, pos.y + 3, pos.x + waveWidth/2, pos.y);
-                ctx.stroke();
-            }
         }
     },
 
     OCEAN: {
         id: 'ocean',
         name: 'Ocean',
-        baseColor: '#0d47a1',
-        accentColor: '#1565c0',
-        borderColor: '#0a3d91',
+        baseColor: '#1565c0',
+        accentColor: '#1976d2',
+        borderColor: '#0d47a1',
         weight: 0, // Only placed by generator
         render: (ctx, cx, cy, size, seed) => {
-            const randoms = getRandoms(seed, 15);
-            ctx.strokeStyle = '#1976d2';
+            const points = getDistributedPoints(cx, cy, size, seed, 3, 0.5);
+            const randoms = getRandoms(seed + 500, 10);
+
+            ctx.strokeStyle = '#42a5f5';
             ctx.lineWidth = 1.5;
             ctx.lineCap = 'round';
 
-            // Gentle ocean waves
-            const numWaves = 2 + Math.floor(randoms[0] * 2);
-            for (let i = 0; i < numWaves; i++) {
-                const ri = i * 3;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.5);
-                const waveWidth = 12 + randoms[ri + 3] * 8;
-
+            points.forEach((pos, i) => {
+                const waveWidth = 10 + randoms[i] * 8;
                 ctx.beginPath();
                 ctx.moveTo(pos.x - waveWidth/2, pos.y);
                 ctx.quadraticCurveTo(pos.x, pos.y - 2, pos.x + waveWidth/2, pos.y);
                 ctx.stroke();
-            }
+            });
         }
     },
 
@@ -230,7 +200,7 @@ export const TerrainTypes = {
         borderColor: '#6d4c41',
         weight: 2,
         render: (ctx, cx, cy, size, seed) => {
-            // Castle is always centered
+            // Castle stays centered
             ctx.fillStyle = '#5d4037';
             // Main wall
             ctx.fillRect(cx - 12, cy - 2, 24, 14);
@@ -276,17 +246,12 @@ export const TerrainTypes = {
         render: (ctx, cx, cy, size, seed) => {
             const randoms = getRandoms(seed, 20);
 
-            // Scatter houses
-            const numHouses = 2 + Math.floor(randoms[0] * 2);
-            const houses = [];
-
-            for (let i = 0; i < numHouses; i++) {
-                const ri = i * 4;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.45);
-                const houseW = 8 + randoms[ri + 3] * 6;
-                const houseH = 6 + randoms[ri + 3] * 4;
-                houses.push({ x: pos.x - houseW/2, y: pos.y, w: houseW, h: houseH });
-            }
+            // Houses in a small cluster near center
+            const houses = [
+                { x: cx - 8, y: cy - 2, w: 10, h: 8 },
+                { x: cx + 2, y: cy + 2, w: 12, h: 10 },
+                { x: cx - 4, y: cy - 10, w: 8, h: 6 }
+            ];
 
             houses.forEach(house => {
                 const hx = house.x;
@@ -319,31 +284,32 @@ export const TerrainTypes = {
         render: (ctx, cx, cy, size, seed) => {
             const randoms = getRandoms(seed, 20);
 
-            // Dunes
+            // Dune (centered)
             ctx.fillStyle = '#f9a825';
-            const dunePos = randomHexPoint(cx, cy, size, randoms[1], randoms[2], 0.4);
             ctx.beginPath();
-            ctx.moveTo(dunePos.x - 18, dunePos.y + 8);
-            ctx.quadraticCurveTo(dunePos.x - 5, dunePos.y - 4, dunePos.x + 8, dunePos.y + 8);
-            ctx.quadraticCurveTo(dunePos.x + 15, dunePos.y + 2, dunePos.x + 20, dunePos.y + 8);
+            ctx.moveTo(cx - 18, cy + 8);
+            ctx.quadraticCurveTo(cx - 5, cy - 4, cx + 8, cy + 8);
+            ctx.quadraticCurveTo(cx + 15, cy + 2, cx + 20, cy + 8);
             ctx.fill();
 
-            // Scatter cacti
-            const numCacti = 1 + Math.floor(randoms[0] * 2);
-            for (let i = 0; i < numCacti; i++) {
-                const ri = 5 + i * 3;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri], randoms[ri + 1], 0.5);
-                const cactusSize = 0.6 + randoms[ri + 2] * 0.5;
+            // Distributed cacti
+            const cactusPoints = getDistributedPoints(cx, cy, size, seed + 100, 2, 0.5);
 
+            cactusPoints.forEach((pos, i) => {
+                const cactusSize = 0.6 + randoms[i] * 0.4;
                 ctx.fillStyle = '#558b2f';
                 // Main stem
                 ctx.fillRect(pos.x - 2 * cactusSize, pos.y - 6 * cactusSize, 4 * cactusSize, 14 * cactusSize);
                 // Arms
-                ctx.fillRect(pos.x - 8 * cactusSize, pos.y - 2 * cactusSize, 6 * cactusSize, 3 * cactusSize);
-                ctx.fillRect(pos.x - 8 * cactusSize, pos.y - 5 * cactusSize, 3 * cactusSize, 6 * cactusSize);
-                ctx.fillRect(pos.x + 2 * cactusSize, pos.y, 6 * cactusSize, 3 * cactusSize);
-                ctx.fillRect(pos.x + 5 * cactusSize, pos.y - 4 * cactusSize, 3 * cactusSize, 7 * cactusSize);
-            }
+                if (randoms[i + 5] > 0.3) {
+                    ctx.fillRect(pos.x - 8 * cactusSize, pos.y - 2 * cactusSize, 6 * cactusSize, 3 * cactusSize);
+                    ctx.fillRect(pos.x - 8 * cactusSize, pos.y - 5 * cactusSize, 3 * cactusSize, 6 * cactusSize);
+                }
+                if (randoms[i + 6] > 0.3) {
+                    ctx.fillRect(pos.x + 2 * cactusSize, pos.y, 6 * cactusSize, 3 * cactusSize);
+                    ctx.fillRect(pos.x + 5 * cactusSize, pos.y - 4 * cactusSize, 3 * cactusSize, 7 * cactusSize);
+                }
+            });
         }
     },
 
@@ -359,25 +325,20 @@ export const TerrainTypes = {
 
             // Water puddles
             ctx.fillStyle = '#3d5229';
-            const numPuddles = 1 + Math.floor(randoms[0] * 2);
-            for (let i = 0; i < numPuddles; i++) {
-                const ri = i * 3;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri + 1], randoms[ri + 2], 0.5);
-                const pw = 8 + randoms[ri + 3] * 6;
-                const ph = 4 + randoms[ri + 3] * 3;
-                ctx.beginPath();
-                ctx.ellipse(pos.x, pos.y, pw, ph, randoms[ri + 4] * 0.5, 0, Math.PI * 2);
-                ctx.fill();
-            }
+            ctx.beginPath();
+            ctx.ellipse(cx - 4, cy + 2, 10, 5, 0.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.ellipse(cx + 8, cy - 4, 7, 4, -0.2, 0, Math.PI * 2);
+            ctx.fill();
 
-            // Reeds
+            // Distributed reeds
+            const reedPoints = getDistributedPoints(cx, cy, size, seed + 100, 5, 0.6);
+
             ctx.strokeStyle = '#8d6e63';
             ctx.lineWidth = 2;
-            const numReeds = 3 + Math.floor(randoms[10] * 3);
-            for (let i = 0; i < numReeds; i++) {
-                const ri = 11 + i * 2;
-                const pos = randomHexPoint(cx, cy, size, randoms[ri], randoms[ri + 1], 0.6);
 
+            reedPoints.forEach((pos, i) => {
                 ctx.beginPath();
                 ctx.moveTo(pos.x, pos.y);
                 ctx.quadraticCurveTo(pos.x + 2, pos.y - 8, pos.x, pos.y - 14);
@@ -388,7 +349,7 @@ export const TerrainTypes = {
                 ctx.beginPath();
                 ctx.ellipse(pos.x, pos.y - 15, 2, 4, 0, 0, Math.PI * 2);
                 ctx.fill();
-            }
+            });
         }
     }
 };

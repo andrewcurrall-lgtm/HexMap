@@ -1,6 +1,14 @@
 // Procedural map generation with coherent biomes, oceans, and rivers
 
-import { TerrainTypes, getRandomTerrain } from './terrain.js';
+import { TerrainTypes } from './terrain.js';
+
+// Map generation styles
+export const MapStyles = {
+    ISLAND: 'island',
+    ARCHIPELAGO: 'archipelago',
+    COASTAL: 'coastal',
+    CONTINENT: 'continent'
+};
 
 export class MapGenerator {
     constructor(hexGrid) {
@@ -26,7 +34,6 @@ export class MapGenerator {
         const fx = sx - x0;
         const fy = sy - y0;
 
-        // Smooth interpolation
         const sfx = fx * fx * (3 - 2 * fx);
         const sfy = fy * fy * (3 - 2 * fy);
 
@@ -42,48 +49,84 @@ export class MapGenerator {
     }
 
     // Generate a complete map
-    generate(cols, rows) {
+    generate(cols, rows, style = null) {
         const seed = Math.random() * 10000;
 
-        // Generate elevation map first (we'll use this for terrain AND rivers)
-        const elevation = this.generateElevationMap(cols, rows, seed);
+        // Pick random style if not specified
+        if (!style) {
+            const styles = Object.values(MapStyles);
+            style = styles[Math.floor(Math.random() * styles.length)];
+        }
+
+        // Generate elevation map based on style
+        const elevation = this.generateElevationMap(cols, rows, seed, style);
         const moisture = this.generateMoistureMap(cols, rows, seed);
         const temperature = this.generateTemperatureMap(cols, rows, seed);
 
         // Create terrain map
         const map = this.generateTerrainFromMaps(cols, rows, elevation, moisture, temperature);
 
-        // Add ocean around edges
-        this.addOceans(map, cols, rows, elevation);
-
-        // Generate rivers (flowing from high to low elevation)
+        // Generate rivers (before settlements so we can place near rivers)
         const rivers = this.generateRivers(map, cols, rows, elevation);
 
-        // Place settlements
-        const settlements = this.placeSettlements(map, cols, rows, seed);
+        // Place settlements (biased toward water and rivers)
+        const settlements = this.placeSettlements(map, cols, rows, rivers, seed);
 
         // Generate roads between settlements
-        const roads = this.generateRoads(map, cols, rows, settlements, elevation);
+        const roads = this.generateRoads(map, cols, rows, settlements, rivers);
 
-        return { map, rivers, roads, elevation };
+        return { map, rivers, roads, elevation, style };
     }
 
-    generateElevationMap(cols, rows, seed) {
+    generateElevationMap(cols, rows, seed, style) {
         const elevation = [];
+
         for (let row = 0; row < rows; row++) {
             elevation[row] = [];
             for (let col = 0; col < cols; col++) {
-                // Distance from center affects base elevation (island-like)
                 const dx = (col - cols/2) / (cols/2);
                 const dy = (row - rows/2) / (rows/2);
                 const distFromCenter = Math.sqrt(dx*dx + dy*dy);
-                const edgeFalloff = Math.max(0, 1 - distFromCenter * 0.8);
 
+                // Base noise
                 const noise = this.smoothNoise(col, row, 8, seed) * 0.5 +
                               this.smoothNoise(col, row, 4, seed + 100) * 0.3 +
                               this.smoothNoise(col, row, 2, seed + 200) * 0.2;
 
-                elevation[row][col] = noise * edgeFalloff;
+                let finalElevation;
+
+                switch (style) {
+                    case MapStyles.ISLAND:
+                        // Single island in center
+                        const islandFalloff = Math.max(0, 1 - distFromCenter * 1.1);
+                        finalElevation = noise * islandFalloff;
+                        break;
+
+                    case MapStyles.ARCHIPELAGO:
+                        // Multiple islands using additional noise layer
+                        const islandNoise = this.smoothNoise(col * 2, row * 2, 5, seed + 700);
+                        const archipelagoBase = noise * 0.6 + islandNoise * 0.4;
+                        const edgeFalloff = Math.max(0, 1 - distFromCenter * 0.7);
+                        finalElevation = archipelagoBase * edgeFalloff - 0.15;
+                        break;
+
+                    case MapStyles.COASTAL:
+                        // Land on one side, ocean on other
+                        const coastLine = dx + this.smoothNoise(col, row, 6, seed + 800) * 0.4;
+                        finalElevation = noise * Math.max(0, Math.min(1, 0.7 - coastLine));
+                        break;
+
+                    case MapStyles.CONTINENT:
+                        // Large landmass with some coastal ocean
+                        const gentleFalloff = Math.max(0, 1 - distFromCenter * 0.5);
+                        finalElevation = noise * gentleFalloff + 0.1;
+                        break;
+
+                    default:
+                        finalElevation = noise;
+                }
+
+                elevation[row][col] = Math.max(0, Math.min(1, finalElevation));
             }
         }
         return elevation;
@@ -123,16 +166,17 @@ export class MapGenerator {
 
                 let terrain;
 
-                if (e < 0.2) {
-                    terrain = TerrainTypes.WATER;
-                } else if (e < 0.28) {
-                    terrain = m > 0.5 ? TerrainTypes.SWAMP : TerrainTypes.WATER;
-                } else if (e > 0.7) {
+                // All water is now Ocean (no separate Water type)
+                if (e < 0.25) {
+                    terrain = TerrainTypes.OCEAN;
+                } else if (e > 0.65) {
                     terrain = TerrainTypes.MOUNTAINS;
                 } else if (t > 0.7 && m < 0.3) {
                     terrain = TerrainTypes.DESERT;
-                } else if (m > 0.6) {
-                    terrain = e < 0.35 ? TerrainTypes.SWAMP : TerrainTypes.FOREST;
+                } else if (e < 0.32 && m > 0.5) {
+                    terrain = TerrainTypes.SWAMP;
+                } else if (m > 0.55) {
+                    terrain = TerrainTypes.FOREST;
                 } else if (m > 0.35) {
                     terrain = Math.random() > 0.4 ? TerrainTypes.FOREST : TerrainTypes.PLAINS;
                 } else {
@@ -145,81 +189,58 @@ export class MapGenerator {
         return map;
     }
 
-    addOceans(map, cols, rows, elevation) {
-        // Convert water tiles near edges to ocean
-        for (let row = 0; row < rows; row++) {
-            for (let col = 0; col < cols; col++) {
-                const isEdge = col === 0 || col === cols - 1 || row === 0 || row === rows - 1;
-                const nearEdge = col <= 2 || col >= cols - 3 || row <= 2 || row >= rows - 3;
-
-                if (isEdge || (nearEdge && elevation[row][col] < 0.25)) {
-                    map[row][col] = TerrainTypes.OCEAN;
-                } else if (map[row][col].id === 'water') {
-                    // Check if connected to edge water (flood fill would be better but this is simpler)
-                    const neighbors = this.hexGrid.getNeighbors(col, row);
-                    const hasOceanNeighbor = neighbors.some(n =>
-                        n.row >= 0 && n.row < rows &&
-                        n.col >= 0 && n.col < cols &&
-                        map[n.row]?.[n.col]?.id === 'ocean'
-                    );
-                    if (hasOceanNeighbor && elevation[row][col] < 0.22) {
-                        map[row][col] = TerrainTypes.OCEAN;
-                    }
-                }
-            }
-        }
-
-        // Second pass to expand ocean
-        for (let pass = 0; pass < 2; pass++) {
-            for (let row = 0; row < rows; row++) {
-                for (let col = 0; col < cols; col++) {
-                    if (map[row][col].id === 'water' && elevation[row][col] < 0.23) {
-                        const neighbors = this.hexGrid.getNeighbors(col, row);
-                        const oceanNeighbors = neighbors.filter(n =>
-                            n.row >= 0 && n.row < rows &&
-                            n.col >= 0 && n.col < cols &&
-                            map[n.row]?.[n.col]?.id === 'ocean'
-                        ).length;
-                        if (oceanNeighbors >= 2) {
-                            map[row][col] = TerrainTypes.OCEAN;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     generateRivers(map, cols, rows, elevation) {
-        const rivers = []; // Array of river paths, each path is array of {col, row, entryEdge, exitEdge}
+        const rivers = [];
 
-        // Find good river sources (high elevation, not too close to edges)
+        // Find ALL potential river sources (high elevation land tiles)
         const sources = [];
-        for (let row = 3; row < rows - 3; row++) {
-            for (let col = 3; col < cols - 3; col++) {
-                if (elevation[row][col] > 0.55 && elevation[row][col] < 0.75) {
-                    // Check it's on or near mountains
-                    if (map[row][col].id === 'mountains' ||
-                        this.hexGrid.getNeighbors(col, row).some(n =>
-                            n.row >= 0 && n.row < rows &&
-                            n.col >= 0 && n.col < cols &&
-                            map[n.row]?.[n.col]?.id === 'mountains'
-                        )) {
-                        sources.push({ col, row, elevation: elevation[row][col] });
-                    }
+        for (let row = 2; row < rows - 2; row++) {
+            for (let col = 2; col < cols - 2; col++) {
+                const e = elevation[row][col];
+                const terrain = map[row][col];
+
+                // Rivers can start from any high land (mountains or high ground)
+                if (terrain.id !== 'ocean' && e > 0.45) {
+                    sources.push({ col, row, elevation: e });
                 }
             }
         }
 
-        // Sort by elevation and pick top few
-        sources.sort((a, b) => b.elevation - a.elevation);
-        const numRivers = Math.min(3, Math.max(1, Math.floor(sources.length / 3)));
+        if (sources.length === 0) return rivers;
 
-        for (let i = 0; i < numRivers; i++) {
-            if (sources[i]) {
-                const river = this.traceRiver(map, cols, rows, elevation, sources[i].col, sources[i].row);
-                if (river.length > 3) {
-                    rivers.push(river);
+        // Sort by elevation (highest first) and pick several
+        sources.sort((a, b) => b.elevation - a.elevation);
+        const numRivers = Math.min(5, Math.max(2, Math.floor(sources.length / 8)));
+
+        // Space out river sources
+        const usedSources = new Set();
+        const selectedSources = [];
+
+        for (const source of sources) {
+            if (selectedSources.length >= numRivers) break;
+
+            // Check distance from other selected sources
+            let tooClose = false;
+            for (const selected of selectedSources) {
+                const dist = Math.sqrt(
+                    (source.col - selected.col) ** 2 +
+                    (source.row - selected.row) ** 2
+                );
+                if (dist < 5) {
+                    tooClose = true;
+                    break;
                 }
+            }
+
+            if (!tooClose) {
+                selectedSources.push(source);
+            }
+        }
+
+        for (const source of selectedSources) {
+            const river = this.traceRiver(map, cols, rows, elevation, source.col, source.row);
+            if (river.length >= 3) {
+                rivers.push(river);
             }
         }
 
@@ -234,7 +255,7 @@ export class MapGenerator {
         let prevCol = -1;
         let prevRow = -1;
 
-        for (let step = 0; step < 50; step++) {
+        for (let step = 0; step < 100; step++) {
             const key = `${col},${row}`;
             if (visited.has(key)) break;
             visited.add(key);
@@ -242,9 +263,8 @@ export class MapGenerator {
             const terrain = map[row]?.[col];
             if (!terrain) break;
 
-            // Stop at ocean or water
-            if (terrain.id === 'ocean' || terrain.id === 'water') {
-                // Add final segment entering water
+            // Stop at ocean
+            if (terrain.id === 'ocean') {
                 if (river.length > 0) {
                     const entryEdge = this.hexGrid.getEdgeToNeighbor(col, row, prevCol, prevRow);
                     river.push({ col, row, entryEdge, exitEdge: -1 });
@@ -255,19 +275,17 @@ export class MapGenerator {
             // Find lowest neighbor
             const neighbors = this.hexGrid.getNeighbors(col, row);
             let lowestNeighbor = null;
-            let lowestElevation = elevation[row][col];
+            let lowestElevation = elevation[row][col] + 0.01; // Slight bias to continue
 
             neighbors.forEach((n, idx) => {
                 if (n.row >= 0 && n.row < rows && n.col >= 0 && n.col < cols) {
-                    // Don't go back
                     if (n.col === prevCol && n.row === prevRow) return;
 
                     const nElev = elevation[n.row][n.col];
-                    // Prefer lower elevation, or water/ocean
                     const nTerrain = map[n.row][n.col];
-                    const effectiveElev = (nTerrain.id === 'water' || nTerrain.id === 'ocean')
-                        ? -1
-                        : nElev;
+
+                    // Strong preference for ocean
+                    const effectiveElev = nTerrain.id === 'ocean' ? -1 : nElev;
 
                     if (effectiveElev < lowestElevation) {
                         lowestElevation = effectiveElev;
@@ -278,7 +296,6 @@ export class MapGenerator {
 
             if (!lowestNeighbor) break;
 
-            // Record this river segment
             const entryEdge = prevCol >= 0
                 ? this.hexGrid.getEdgeToNeighbor(col, row, prevCol, prevRow)
                 : -1;
@@ -295,16 +312,21 @@ export class MapGenerator {
         return river;
     }
 
-    generateRoads(map, cols, rows, settlements, elevation) {
+    generateRoads(map, cols, rows, settlements, rivers) {
         const roads = [];
-
         if (settlements.length < 2) return roads;
 
-        // Connect each settlement to its nearest neighbor(s)
+        // Create river lookup for pathfinding cost
+        const riverTiles = new Set();
+        rivers.forEach(river => {
+            river.forEach(segment => {
+                riverTiles.add(`${segment.col},${segment.row}`);
+            });
+        });
+
         const connected = new Set();
 
         for (const settlement of settlements) {
-            // Find nearest unconnected settlement
             let nearest = null;
             let nearestDist = Infinity;
 
@@ -321,14 +343,14 @@ export class MapGenerator {
                     (settlement.row - other.row) ** 2
                 );
 
-                if (dist < nearestDist && dist < 15) {
+                if (dist < nearestDist && dist < 20) {
                     nearestDist = dist;
                     nearest = { settlement: other, pairKey };
                 }
             }
 
             if (nearest) {
-                const road = this.findPath(map, cols, rows, elevation,
+                const road = this.findPath(map, cols, rows, riverTiles,
                     settlement.col, settlement.row,
                     nearest.settlement.col, nearest.settlement.row);
                 if (road.length > 0) {
@@ -341,47 +363,40 @@ export class MapGenerator {
         return roads;
     }
 
-    findPath(map, cols, rows, elevation, startCol, startRow, endCol, endRow) {
-        // Simple A* pathfinding
+    findPath(map, cols, rows, riverTiles, startCol, startRow, endCol, endRow) {
         const openSet = [{ col: startCol, row: startRow, g: 0, h: 0, f: 0, parent: null }];
         const closedSet = new Set();
         const gScores = {};
         gScores[`${startCol},${startRow}`] = 0;
 
-        const heuristic = (col, row) => {
-            return Math.sqrt((col - endCol) ** 2 + (row - endRow) ** 2);
-        };
+        const heuristic = (col, row) => Math.sqrt((col - endCol) ** 2 + (row - endRow) ** 2);
 
         const getMoveCost = (col, row) => {
             const terrain = map[row]?.[col];
             if (!terrain) return Infinity;
-            if (terrain.id === 'water' || terrain.id === 'ocean') return Infinity;
+            if (terrain.id === 'ocean') return Infinity;
             if (terrain.id === 'mountains') return 5;
             if (terrain.id === 'forest') return 2;
             if (terrain.id === 'swamp') return 3;
+            // Roads crossing rivers have extra cost (need bridge)
+            if (riverTiles.has(`${col},${row}`)) return 2;
             return 1;
         };
 
         while (openSet.length > 0) {
-            // Find lowest f score
             openSet.sort((a, b) => a.f - b.f);
             const current = openSet.shift();
 
             if (current.col === endCol && current.row === endRow) {
-                // Reconstruct path
                 const path = [];
                 let node = current;
                 while (node.parent) {
                     const entryEdge = this.hexGrid.getEdgeToNeighbor(
                         node.col, node.row, node.parent.col, node.parent.row
                     );
-                    const exitEdge = node.next
-                        ? this.hexGrid.getEdgeToNeighbor(node.col, node.row, node.next.col, node.next.row)
-                        : -1;
-                    path.unshift({ col: node.col, row: node.row, entryEdge, exitEdge });
+                    path.unshift({ col: node.col, row: node.row, entryEdge, exitEdge: -1 });
                     node = node.parent;
                 }
-                // Fix exit edges
                 for (let i = 0; i < path.length - 1; i++) {
                     path[i].exitEdge = this.hexGrid.getEdgeToNeighbor(
                         path[i].col, path[i].row, path[i+1].col, path[i+1].row
@@ -426,26 +441,63 @@ export class MapGenerator {
             }
         }
 
-        return []; // No path found
+        return [];
     }
 
-    placeSettlements(map, cols, rows, seed) {
+    placeSettlements(map, cols, rows, rivers, seed) {
         const settlements = [];
 
-        // Place 1-3 castles
-        const numCastles = Math.floor(Math.random() * 3) + 1;
+        // Create sets for quick lookup
+        const coastalTiles = new Set();
+        const riverTiles = new Set();
+
+        // Find coastal tiles (land adjacent to ocean)
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                if (map[row][col].id !== 'ocean') {
+                    const neighbors = this.hexGrid.getNeighbors(col, row);
+                    const nearOcean = neighbors.some(n =>
+                        n.row >= 0 && n.row < rows &&
+                        n.col >= 0 && n.col < cols &&
+                        map[n.row][n.col]?.id === 'ocean'
+                    );
+                    if (nearOcean) {
+                        coastalTiles.add(`${col},${row}`);
+                    }
+                }
+            }
+        }
+
+        // Mark river tiles
+        rivers.forEach(river => {
+            river.forEach(segment => {
+                riverTiles.add(`${segment.col},${segment.row}`);
+                // Also mark neighbors as "near river"
+                const neighbors = this.hexGrid.getNeighbors(segment.col, segment.row);
+                neighbors.forEach(n => {
+                    if (n.row >= 0 && n.row < rows && n.col >= 0 && n.col < cols) {
+                        if (map[n.row][n.col]?.id !== 'ocean') {
+                            riverTiles.add(`${n.col},${n.row}`);
+                        }
+                    }
+                });
+            });
+        });
+
+        // Place castles (prefer central, near water)
+        const numCastles = Math.floor(Math.random() * 2) + 1;
         for (let i = 0; i < numCastles; i++) {
-            const castle = this.findSettlementLocation(map, cols, rows, settlements, true);
+            const castle = this.findSettlementLocation(map, cols, rows, settlements, true, coastalTiles, riverTiles);
             if (castle) {
                 map[castle.row][castle.col] = TerrainTypes.CASTLE;
                 settlements.push({ ...castle, type: 'castle' });
             }
         }
 
-        // Place villages
-        const numVillages = Math.floor(cols * rows * 0.025) + 2;
+        // Place villages (strongly prefer water)
+        const numVillages = Math.floor(cols * rows * 0.02) + 3;
         for (let i = 0; i < numVillages; i++) {
-            const village = this.findSettlementLocation(map, cols, rows, settlements, false);
+            const village = this.findSettlementLocation(map, cols, rows, settlements, false, coastalTiles, riverTiles);
             if (village) {
                 map[village.row][village.col] = TerrainTypes.VILLAGE;
                 settlements.push({ ...village, type: 'village' });
@@ -455,50 +507,69 @@ export class MapGenerator {
         return settlements;
     }
 
-    findSettlementLocation(map, cols, rows, existing, isCastle) {
-        const maxAttempts = 50;
+    findSettlementLocation(map, cols, rows, existing, isCastle, coastalTiles, riverTiles) {
+        const maxAttempts = 100;
 
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const col = Math.floor(Math.random() * (cols - 4)) + 2;
-            const row = Math.floor(Math.random() * (rows - 4)) + 2;
+        // Collect all valid candidates
+        const candidates = [];
 
-            const currentTerrain = map[row][col];
-            if (currentTerrain.id !== 'plains' && currentTerrain.id !== 'forest') {
-                continue;
-            }
+        for (let row = 2; row < rows - 2; row++) {
+            for (let col = 2; col < cols - 2; col++) {
+                const terrain = map[row][col];
+                if (terrain.id !== 'plains' && terrain.id !== 'forest') continue;
 
-            const minDistance = isCastle ? 8 : 4;
-            let tooClose = false;
-            for (const s of existing) {
-                const dist = Math.sqrt((s.col - col) ** 2 + (s.row - row) ** 2);
-                if (dist < minDistance) {
-                    tooClose = true;
-                    break;
+                // Check distance from existing settlements
+                const minDistance = isCastle ? 8 : 4;
+                let tooClose = false;
+                for (const s of existing) {
+                    const dist = Math.sqrt((s.col - col) ** 2 + (s.row - row) ** 2);
+                    if (dist < minDistance) {
+                        tooClose = true;
+                        break;
+                    }
                 }
-            }
-            if (tooClose) continue;
+                if (tooClose) continue;
 
-            if (isCastle) {
-                const centerDist = Math.sqrt(
-                    ((col - cols/2) / cols) ** 2 +
-                    ((row - rows/2) / rows) ** 2
-                );
-                if (centerDist > 0.35 && Math.random() > 0.3) continue;
-            }
+                // Calculate desirability score
+                let score = 1;
+                const key = `${col},${row}`;
 
-            if (!isCastle) {
-                const neighbors = this.hexGrid.getNeighbors(col, row);
-                const nearWater = neighbors.some(n =>
-                    n.row >= 0 && n.row < rows &&
-                    n.col >= 0 && n.col < cols &&
-                    (map[n.row][n.col]?.id === 'water' || map[n.row][n.col]?.id === 'ocean')
-                );
-                if (!nearWater && Math.random() > 0.5) continue;
-            }
+                // Strong preference for coastal locations
+                if (coastalTiles.has(key)) {
+                    score += 5;
+                }
 
-            return { col, row };
+                // Strong preference for river locations
+                if (riverTiles.has(key)) {
+                    score += 4;
+                }
+
+                // Castles prefer somewhat central locations
+                if (isCastle) {
+                    const centerDist = Math.sqrt(
+                        ((col - cols/2) / cols) ** 2 +
+                        ((row - rows/2) / rows) ** 2
+                    );
+                    score += Math.max(0, 2 - centerDist * 4);
+                }
+
+                candidates.push({ col, row, score });
+            }
         }
 
-        return null;
+        if (candidates.length === 0) return null;
+
+        // Weighted random selection based on score
+        const totalScore = candidates.reduce((sum, c) => sum + c.score, 0);
+        let random = Math.random() * totalScore;
+
+        for (const candidate of candidates) {
+            random -= candidate.score;
+            if (random <= 0) {
+                return { col: candidate.col, row: candidate.row };
+            }
+        }
+
+        return candidates[0];
     }
 }

@@ -1,7 +1,7 @@
 // Main application entry point
 
 import { HexGrid } from './hexGrid.js';
-import { MapGenerator } from './mapGenerator.js';
+import { MapGenerator, MapStyles } from './mapGenerator.js';
 import { CameraControls } from './controls.js';
 import { TerrainTypes } from './terrain.js';
 
@@ -119,7 +119,10 @@ class HexMapApp {
         const legendItems = document.getElementById('legendItems');
         legendItems.innerHTML = '';
 
-        Object.values(TerrainTypes).forEach(terrain => {
+        // Only show terrain types that appear on the map (exclude Ocean from legend)
+        const displayTerrains = Object.values(TerrainTypes).filter(t => t.id !== 'ocean');
+
+        displayTerrains.forEach(terrain => {
             const item = document.createElement('div');
             item.className = 'legend-item';
 
@@ -142,7 +145,7 @@ class HexMapApp {
 
         const ctx = this.ctx;
         const { offsetX, offsetY, scale } = this.controls.getTransform();
-        const { map, rivers, roads } = this.mapData;
+        const { map, rivers, roads, style } = this.mapData;
 
         // Clear canvas
         ctx.fillStyle = '#0f0f1a';
@@ -159,137 +162,122 @@ class HexMapApp {
         const visibleRight = (this.canvas.width - offsetX) / scale + this.hexGrid.hexSize * 2;
         const visibleBottom = (this.canvas.height - offsetY) / scale + this.hexGrid.hexSize * 2;
 
-        // Render hexes
+        // Collect visible hexes
+        const visibleHexes = [];
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
                 const { x, y } = this.hexGrid.hexToPixel(col, row);
-
-                // Frustum culling - skip hexes outside visible area
-                if (x < visibleLeft || x > visibleRight ||
-                    y < visibleTop || y > visibleBottom) {
-                    continue;
+                if (x >= visibleLeft && x <= visibleRight &&
+                    y >= visibleTop && y <= visibleBottom) {
+                    visibleHexes.push({ col, row, x, y });
                 }
-
-                const terrain = map[row][col];
-                const isHovered = this.hoveredHex &&
-                                  this.hoveredHex.col === col &&
-                                  this.hoveredHex.row === row;
-
-                this.hexGrid.drawHex(ctx, col, row, terrain, isHovered);
             }
         }
 
-        // Render roads (below rivers)
+        // PASS 1: Render hex bases (terrain colors)
+        for (const hex of visibleHexes) {
+            const terrain = map[hex.row][hex.col];
+            const isHovered = this.hoveredHex &&
+                              this.hoveredHex.col === hex.col &&
+                              this.hoveredHex.row === hex.row;
+            this.hexGrid.drawHexBase(ctx, hex.col, hex.row, terrain, isHovered);
+        }
+
+        // PASS 2: Render rivers
+        this.renderRivers(ctx, rivers);
+
+        // PASS 3: Render roads (on top of rivers)
         this.renderRoads(ctx, roads);
 
-        // Render rivers (on top)
-        this.renderRivers(ctx, rivers);
+        // PASS 4: Render terrain features (on top of roads and rivers)
+        for (const hex of visibleHexes) {
+            const terrain = map[hex.row][hex.col];
+            this.hexGrid.drawHexFeatures(ctx, hex.col, hex.row, terrain);
+        }
 
         ctx.restore();
 
-        // Draw zoom level indicator
+        // Draw UI overlays
         this.drawZoomIndicator();
+        this.drawMapStyle(style);
     }
 
     renderRivers(ctx, rivers) {
         if (!rivers || rivers.length === 0) return;
 
-        ctx.strokeStyle = '#2196f3';
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
         rivers.forEach(river => {
             if (river.length < 2) return;
 
-            // Draw river as a path through hex edge midpoints
-            ctx.lineWidth = 4;
-            ctx.strokeStyle = '#1565c0';
-            ctx.beginPath();
+            // Draw river outline
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = '#0d47a1';
+            this.drawPath(ctx, river);
 
-            let started = false;
-            for (let i = 0; i < river.length; i++) {
-                const segment = river[i];
-                const { x: cx, y: cy } = this.hexGrid.hexToPixel(segment.col, segment.row);
-
-                if (segment.entryEdge === -1) {
-                    // River source - start from center
-                    ctx.moveTo(cx, cy);
-                    started = true;
-                } else if (!started) {
-                    const entryMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.entryEdge);
-                    ctx.moveTo(entryMid.x, entryMid.y);
-                    started = true;
-                }
-
-                if (segment.exitEdge >= 0) {
-                    const exitMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.exitEdge);
-                    // Curve through center for smoother appearance
-                    ctx.quadraticCurveTo(cx, cy, exitMid.x, exitMid.y);
-                } else {
-                    // River ends here (at water)
-                    ctx.lineTo(cx, cy);
-                }
-            }
-
-            ctx.stroke();
-
-            // Draw lighter highlight
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = '#64b5f6';
-            ctx.stroke();
+            // Draw river fill
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#2196f3';
+            this.drawPath(ctx, river);
         });
     }
 
     renderRoads(ctx, roads) {
         if (!roads || roads.length === 0) return;
 
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
         roads.forEach(road => {
             if (road.length < 1) return;
 
-            // Draw road shadow/outline
+            // Draw road outline
             ctx.lineWidth = 6;
             ctx.strokeStyle = '#5d4037';
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.beginPath();
-
-            let started = false;
-            for (let i = 0; i < road.length; i++) {
-                const segment = road[i];
-                const { x: cx, y: cy } = this.hexGrid.hexToPixel(segment.col, segment.row);
-
-                if (!started) {
-                    if (segment.entryEdge >= 0) {
-                        const entryMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.entryEdge);
-                        ctx.moveTo(entryMid.x, entryMid.y);
-                    } else {
-                        ctx.moveTo(cx, cy);
-                    }
-                    started = true;
-                }
-
-                if (segment.exitEdge >= 0) {
-                    const exitMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.exitEdge);
-                    ctx.quadraticCurveTo(cx, cy, exitMid.x, exitMid.y);
-                } else {
-                    ctx.lineTo(cx, cy);
-                }
-            }
-
-            ctx.stroke();
+            this.drawPath(ctx, road);
 
             // Draw road surface
-            ctx.lineWidth = 3;
+            ctx.lineWidth = 4;
             ctx.strokeStyle = '#a1887f';
-            ctx.stroke();
+            this.drawPath(ctx, road);
 
             // Draw center line (dashed)
             ctx.lineWidth = 1;
             ctx.strokeStyle = '#d7ccc8';
             ctx.setLineDash([4, 4]);
-            ctx.stroke();
+            this.drawPath(ctx, road);
             ctx.setLineDash([]);
         });
+    }
+
+    drawPath(ctx, segments) {
+        ctx.beginPath();
+
+        let started = false;
+        for (let i = 0; i < segments.length; i++) {
+            const segment = segments[i];
+            const { x: cx, y: cy } = this.hexGrid.hexToPixel(segment.col, segment.row);
+
+            if (!started) {
+                if (segment.entryEdge >= 0) {
+                    const entryMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.entryEdge);
+                    ctx.moveTo(entryMid.x, entryMid.y);
+                } else {
+                    ctx.moveTo(cx, cy);
+                }
+                started = true;
+            }
+
+            if (segment.exitEdge >= 0) {
+                const exitMid = this.hexGrid.getEdgeMidpoint(segment.col, segment.row, segment.exitEdge);
+                ctx.quadraticCurveTo(cx, cy, exitMid.x, exitMid.y);
+            } else {
+                ctx.lineTo(cx, cy);
+            }
+        }
+
+        ctx.stroke();
     }
 
     drawZoomIndicator() {
@@ -300,12 +288,40 @@ class HexMapApp {
         ctx.fillStyle = 'rgba(22, 33, 62, 0.8)';
         ctx.fillRect(10, this.canvas.height - 35, 80, 25);
         ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 1;
         ctx.strokeRect(10, this.canvas.height - 35, 80, 25);
 
         ctx.fillStyle = '#fff';
         ctx.font = '12px "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(`${Math.round(scale * 100)}% zoom`, 50, this.canvas.height - 18);
+        ctx.restore();
+    }
+
+    drawMapStyle(style) {
+        if (!style) return;
+
+        const ctx = this.ctx;
+        const styleNames = {
+            [MapStyles.ISLAND]: 'Island',
+            [MapStyles.ARCHIPELAGO]: 'Archipelago',
+            [MapStyles.COASTAL]: 'Coastal',
+            [MapStyles.CONTINENT]: 'Continent'
+        };
+
+        const name = styleNames[style] || style;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(22, 33, 62, 0.8)';
+        ctx.fillRect(100, this.canvas.height - 35, 90, 25);
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(100, this.canvas.height - 35, 90, 25);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(name, 145, this.canvas.height - 18);
         ctx.restore();
     }
 }
