@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fantasy Hex Map Generator</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="toolbar">
+            <h1>Fantasy Hex Map</h1>
+            <div class="controls">
+                <label>
+                    Map Size:
+                    <select id="mapSize">
+                        <option value="small">Small (15x12)</option>
+                        <option value="medium" selected>Medium (25x20)</option>
+                        <option value="large">Large (40x30)</option>
+                    </select>
+                </label>
+                <button id="generateBtn">Generate New Map</button>
+                <button id="resetViewBtn">Reset View</button>
+            </div>
+            <div class="info">
+                <span>Scroll to zoom | Drag to pan</span>
+            </div>
+        </div>
+        <div id="canvasContainer">
+            <canvas id="hexCanvas"></canvas>
+        </div>
+        <div id="legend">
+            <h3>Terrain Types</h3>
+            <div id="legendItems"></div>
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
